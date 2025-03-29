@@ -31,6 +31,7 @@ def init_static_cache(config: PretrainedConfig, max_batch_size: int, max_cache_l
         new_layer_key_cache = ms.Tensor(np.zeros(cache_shape), dtype=dtype)
         new_layer_value_cache = ms.Tensor(np.zeros(cache_shape), dtype=dtype)
         key_value_cache += [(new_layer_key_cache, new_layer_value_cache)]
+    key_value_cache = tuple(key_value_cache)
 
     return key_value_cache
 
