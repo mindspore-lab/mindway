@@ -1907,8 +1907,8 @@ class GenerationMixin:
             if not isinstance(outputs, CausalLMOutputWithPast):
                 outputs = CausalLMOutputWithPast(
                     loss=None,
-                    logits=outputs[0],
-                    past_key_values=outputs[1] if model_inputs.get("use_cache", False) else None,
+                    logits=outputs["logits"],
+                    past_key_values=outputs["past_key_values"] if model_inputs.get("use_cache", False) else None,
                 )
 
             # Tuple static cache
