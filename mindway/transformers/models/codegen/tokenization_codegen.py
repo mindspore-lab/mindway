@@ -17,19 +17,12 @@
 import json
 import os
 from functools import lru_cache
-from typing import TYPE_CHECKING, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union
 
 import numpy as np
 import regex as re
 
-from ...utils import is_tf_available, is_torch_available, logging, to_py_obj
-
-
-if TYPE_CHECKING:
-    if is_torch_available():
-        import torch
-    if is_tf_available():
-        import tensorflow as tf
+from ...utils import logging, to_py_obj
 
 from ...tokenization_utils import AddedToken, PreTrainedTokenizer
 
