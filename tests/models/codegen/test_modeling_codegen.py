@@ -17,9 +17,10 @@
 import datetime
 import unittest
 
-from transformers import CodeGenConfig, is_torch_available
-from transformers.file_utils import cached_property
-from transformers.testing_utils import backend_manual_seed, is_flaky, require_torch, slow, torch_device
+from mindway.transformers import CodeGenConfig, is_mindspore_available
+from mindway.transformers.file_utils import cached_property
+from mindway.transformers.testing_utils import is_flaky, slow, require_mindspore
+from mindway.transformers.trainer_utils import set_seed
 
 from ...generation.test_utils import GenerationTesterMixin
 from ...test_configuration_common import ConfigTester
@@ -27,10 +28,11 @@ from ...test_modeling_common import ModelTesterMixin, ids_tensor, random_attenti
 from ...test_pipeline_mixin import PipelineTesterMixin
 
 
-if is_torch_available():
-    import torch
-
-    from transformers import AutoTokenizer, CodeGenForCausalLM, CodeGenModel
+if is_mindspore_available():
+    import mindspore as ms
+    from mindspore import mint
+    from transformers import AutoTokenizer
+    from mindway.transformers import CodeGenForCausalLM, CodeGenModel
 
 
 class CodeGenModelTester:
@@ -152,8 +154,6 @@ class CodeGenModelTester:
 
     def create_and_check_codegen_model(self, config, input_ids, input_mask, head_mask, token_type_ids, *args):
         model = CodeGenModel(config=config)
-        model.to(torch_device)
-        model.eval()
 
         result = model(input_ids, token_type_ids=token_type_ids, head_mask=head_mask)
         result = model(input_ids, token_type_ids=token_type_ids)
@@ -164,8 +164,6 @@ class CodeGenModelTester:
 
     def create_and_check_codegen_model_past(self, config, input_ids, input_mask, head_mask, token_type_ids, *args):
         model = CodeGenModel(config=config)
-        model.to(torch_device)
-        model.eval()
 
         # first forward pass
         outputs = model(input_ids, token_type_ids=token_type_ids, use_cache=True)
@@ -182,8 +180,8 @@ class CodeGenModelTester:
         next_token_types = ids_tensor([self.batch_size, 1], self.type_vocab_size)
 
         # append to next input_ids and token_type_ids
-        next_input_ids = torch.cat([input_ids, next_tokens], dim=-1)
-        next_token_type_ids = torch.cat([token_type_ids, next_token_types], dim=-1)
+        next_input_ids = mint.cat([input_ids, next_tokens], dim=-1)
+        next_token_type_ids = mint.cat([token_type_ids, next_token_types], dim=-1)
 
         output_from_no_past = model(next_input_ids, token_type_ids=next_token_type_ids)["last_hidden_state"]
         output_from_past = model(next_tokens, token_type_ids=next_token_types, past_key_values=past)[
@@ -196,17 +194,15 @@ class CodeGenModelTester:
         output_from_past_slice = output_from_past[:, 0, random_slice_idx].detach()
 
         # test that outputs are equal for slice
-        self.parent.assertTrue(torch.allclose(output_from_past_slice, output_from_no_past_slice, atol=1e-3))
+        self.parent.assertTrue(mint.allclose(output_from_past_slice, output_from_no_past_slice, atol=1e-3))
 
     def create_and_check_codegen_model_attention_mask_past(
         self, config, input_ids, input_mask, head_mask, token_type_ids, *args
     ):
         model = CodeGenModel(config=config)
-        model.to(torch_device)
-        model.eval()
 
         # create attention mask
-        attn_mask = torch.ones(input_ids.shape, dtype=torch.long, device=torch_device)
+        attn_mask = mint.ones(input_ids.shape, dtype=ms.int64)
         half_seq_length = self.seq_length // 2
         attn_mask[:, half_seq_length:] = 0
 
@@ -222,9 +218,9 @@ class CodeGenModelTester:
         input_ids[:, -random_seq_idx_to_change] = random_other_next_tokens
 
         # append to next input_ids and attn_mask
-        next_input_ids = torch.cat([input_ids, next_tokens], dim=-1)
-        attn_mask = torch.cat(
-            [attn_mask, torch.ones((attn_mask.shape[0], 1), dtype=torch.long, device=torch_device)],
+        next_input_ids = mint.cat([input_ids, next_tokens], dim=-1)
+        attn_mask = mint.cat(
+            [attn_mask, mint.ones((attn_mask.shape[0], 1), dtype=ms.int64)],
             dim=1,
         )
 
@@ -238,14 +234,13 @@ class CodeGenModelTester:
         output_from_past_slice = output_from_past[:, 0, random_slice_idx].detach()
 
         # test that outputs are equal for slice
-        self.parent.assertTrue(torch.allclose(output_from_past_slice, output_from_no_past_slice, atol=1e-3))
+        self.parent.assertTrue(mint.allclose(output_from_past_slice, output_from_no_past_slice, atol=1e-3))
 
     def create_and_check_codegen_model_past_large_inputs(
         self, config, input_ids, input_mask, head_mask, token_type_ids, *args
     ):
         model = CodeGenModel(config=config)
-        model.to(torch_device)
-        model.eval()
+        model.set_train(False)
 
         # first forward pass
         outputs = model(input_ids, token_type_ids=token_type_ids, attention_mask=input_mask, use_cache=True)
@@ -258,9 +253,9 @@ class CodeGenModelTester:
         next_mask = ids_tensor((self.batch_size, 3), vocab_size=2)
 
         # append to next input_ids and token_type_ids
-        next_input_ids = torch.cat([input_ids, next_tokens], dim=-1)
-        next_token_type_ids = torch.cat([token_type_ids, next_token_types], dim=-1)
-        next_attention_mask = torch.cat([input_mask, next_mask], dim=-1)
+        next_input_ids = mint.cat([input_ids, next_tokens], dim=-1)
+        next_token_type_ids = mint.cat([token_type_ids, next_token_types], dim=-1)
+        next_attention_mask = mint.cat([input_mask, next_mask], dim=-1)
 
         output_from_no_past = model(
             next_input_ids, token_type_ids=next_token_type_ids, attention_mask=next_attention_mask
@@ -276,12 +271,11 @@ class CodeGenModelTester:
         output_from_past_slice = output_from_past[:, :, random_slice_idx].detach()
 
         # test that outputs are equal for slice
-        self.parent.assertTrue(torch.allclose(output_from_past_slice, output_from_no_past_slice, atol=1e-3))
+        self.parent.assertTrue(mint.allclose(output_from_past_slice, output_from_no_past_slice, atol=1e-3))
 
     def create_and_check_lm_head_model(self, config, input_ids, input_mask, head_mask, token_type_ids, *args):
         model = CodeGenForCausalLM(config)
-        model.to(torch_device)
-        model.eval()
+        model.set_train(False)
 
         result = model(input_ids, token_type_ids=token_type_ids, labels=input_ids)
         self.parent.assertEqual(result.loss.shape, ())
@@ -293,7 +287,6 @@ class CodeGenModelTester:
         model = CodeGenForCausalLM(config)
         if gradient_checkpointing:
             model.gradient_checkpointing_enable()
-        model.to(torch_device)
 
         result = model(input_ids, token_type_ids=token_type_ids, labels=input_ids)
         self.parent.assertEqual(result.loss.shape, ())
@@ -320,12 +313,12 @@ class CodeGenModelTester:
         return config, inputs_dict
 
 
-@require_torch
+@require_mindspore
 class CodeGenModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMixin, unittest.TestCase):
-    all_model_classes = (CodeGenModel, CodeGenForCausalLM) if is_torch_available() else ()
-    all_generative_model_classes = (CodeGenForCausalLM,) if is_torch_available() else ()
+    all_model_classes = (CodeGenModel, CodeGenForCausalLM) if is_mindspore_available() else ()
+    all_generative_model_classes = (CodeGenForCausalLM,) if is_mindspore_available() else ()
     pipeline_model_mapping = (
-        {"feature-extraction": CodeGenModel, "text-generation": CodeGenForCausalLM} if is_torch_available() else {}
+        {"feature-extraction": CodeGenModel, "text-generation": CodeGenForCausalLM} if is_mindspore_available() else {}
     )
     fx_compatible = False
     test_pruning = False
@@ -373,7 +366,6 @@ class CodeGenModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMi
     def test_batch_generation(self):
         tokenizer = AutoTokenizer.from_pretrained("Salesforce/codegen-350M-mono")
         model = CodeGenForCausalLM.from_pretrained("Salesforce/codegen-350M-mono")
-        model.to(torch_device)
 
         tokenizer.padding_side = "left"
 
@@ -384,9 +376,9 @@ class CodeGenModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMi
         # use different length sentences to test batching
         sentences = ["def hellow_world():", "def greet(name):"]
 
-        inputs = tokenizer(sentences, return_tensors="pt", padding=True)
-        input_ids = inputs["input_ids"].to(torch_device)
-        token_type_ids = torch.cat(
+        inputs = tokenizer(sentences, return_tensors="np", padding=True)
+        input_ids = inputs["input_ids"]
+        token_type_ids = mint.cat(
             [
                 input_ids.new_full((input_ids.shape[0], input_ids.shape[1] - 1), 0),
                 input_ids.new_full((input_ids.shape[0], 1), 500),
@@ -396,20 +388,20 @@ class CodeGenModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMi
 
         outputs = model.generate(
             input_ids=input_ids,
-            attention_mask=inputs["attention_mask"].to(torch_device),
+            attention_mask=inputs["attention_mask"]
         )
 
         outputs_tt = model.generate(
             input_ids=input_ids,
-            attention_mask=inputs["attention_mask"].to(torch_device),
+            attention_mask=inputs["attention_mask"],
             token_type_ids=token_type_ids,
         )
 
-        inputs_non_padded = tokenizer(sentences[0], return_tensors="pt").input_ids.to(torch_device)
+        inputs_non_padded = tokenizer(sentences[0], return_tensors="np").input_ids
         output_non_padded = model.generate(input_ids=inputs_non_padded)
 
         num_paddings = inputs_non_padded.shape[-1] - inputs["attention_mask"][-1].long().sum().cpu().item()
-        inputs_padded = tokenizer(sentences[1], return_tensors="pt").input_ids.to(torch_device)
+        inputs_padded = tokenizer(sentences[1], return_tensors="np").input_ids
         output_padded = model.generate(input_ids=inputs_padded, max_length=model.config.max_length - num_paddings)
 
         batch_out_sentence = tokenizer.batch_decode(outputs, skip_special_tokens=True)
@@ -432,7 +424,7 @@ class CodeGenModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMi
         self.assertIsNotNone(model)
 
 
-@require_torch
+@require_mindspore
 class CodeGenModelLanguageGenerationTest(unittest.TestCase):
     @cached_property
     def cached_tokenizer(self):
@@ -452,9 +444,8 @@ class CodeGenModelLanguageGenerationTest(unittest.TestCase):
                 model.gradient_checkpointing_enable()
             else:
                 model.gradient_checkpointing_disable()
-            model.to(torch_device)
 
-            inputs = tokenizer("def hello_world():", return_tensors="pt").to(torch_device)
+            inputs = tokenizer("def hello_world():", return_tensors="np")
             expected_output = 'def hello_world():\n    print("Hello World")\n\nhello_world()\n\n'
 
             output_ids = model.generate(**inputs, do_sample=False)
@@ -466,17 +457,15 @@ class CodeGenModelLanguageGenerationTest(unittest.TestCase):
     def test_codegen_sample(self):
         tokenizer = self.cached_tokenizer
         model = self.cached_model
-        model.to(torch_device)
 
-        torch.manual_seed(0)
-        backend_manual_seed(torch_device, 0)
+        set_seed(0)
 
-        tokenized = tokenizer("def hello_world():", return_tensors="pt", return_token_type_ids=True)
-        input_ids = tokenized.input_ids.to(torch_device)
+        tokenized = tokenizer("def hello_world():", return_tensors="np", return_token_type_ids=True)
+        input_ids = tokenized.input_ids
         output_ids = model.generate(input_ids, do_sample=True)
         output_str = tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
-        token_type_ids = tokenized.token_type_ids.to(torch_device)
+        token_type_ids = tokenized.token_type_ids
         output_seq = model.generate(input_ids=input_ids, do_sample=True, num_return_sequences=5)
         output_seq_tt = model.generate(
             input_ids=input_ids, token_type_ids=token_type_ids, do_sample=True, num_return_sequences=5
@@ -484,10 +473,10 @@ class CodeGenModelLanguageGenerationTest(unittest.TestCase):
         output_seq_strs = tokenizer.batch_decode(output_seq, skip_special_tokens=True)
         output_seq_tt_strs = tokenizer.batch_decode(output_seq_tt, skip_special_tokens=True)
 
-        if torch_device == "cuda":
-            EXPECTED_OUTPUT_STR = 'def hello_world():\n    print("Hello World")\n    return True\n\nresult ='
-        else:
-            EXPECTED_OUTPUT_STR = "def hello_world():\r\n    print('Hello, World.')\r\n\r\n\r"
+        # if torch_device == "cuda":
+        EXPECTED_OUTPUT_STR = 'def hello_world():\n    print("Hello World")\n    return True\n\nresult ='
+        # else:
+        #     EXPECTED_OUTPUT_STR = "def hello_world():\r\n    print('Hello, World.')\r\n\r\n\r"
 
         self.assertEqual(output_str, EXPECTED_OUTPUT_STR)
         self.assertTrue(
@@ -499,11 +488,10 @@ class CodeGenModelLanguageGenerationTest(unittest.TestCase):
     def test_codegen_sample_max_time(self):
         tokenizer = self.cached_tokenizer
         model = self.cached_model
-        model.to(torch_device)
 
-        torch.manual_seed(0)
-        tokenized = tokenizer("Today is a nice day and", return_tensors="pt", return_token_type_ids=True)
-        input_ids = tokenized.input_ids.to(torch_device)
+        set_seed(0)
+        tokenized = tokenizer("Today is a nice day and", return_tensors="np", return_token_type_ids=True)
+        input_ids = tokenized.input_ids
 
         MAX_TIME = 0.05
 

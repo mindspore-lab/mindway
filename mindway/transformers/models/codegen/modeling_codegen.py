@@ -12,34 +12,26 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""PyTorch CodeGen model."""
+"""MindSpore CodeGen model."""
 
 from typing import Optional, Tuple, Union
 
-import torch
-import torch.utils.checkpoint
-from torch import nn
+import mindspore as ms
+from mindspore import nn, mint
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache, StaticCache
 from ...generation import GenerationMixin
 from ...modeling_attn_mask_utils import AttentionMaskConverter
 from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
-from ...modeling_utils import PreTrainedModel
+from ...modeling_utils import MSPreTrainedModel as PreTrainedModel
 from ...utils import (
     add_code_sample_docstrings,
     add_start_docstrings,
     add_start_docstrings_to_model_forward,
-    is_torch_flex_attn_available,
     logging,
 )
 from .configuration_codegen import CodeGenConfig
-
-
-if is_torch_flex_attn_available():
-    from torch.nn.attention.flex_attention import BlockMask
-
-    from ...integrations.flex_attention import make_flex_block_causal_mask
 
 
 logger = logging.get_logger(__name__)
@@ -48,25 +40,25 @@ _CHECKPOINT_FOR_DOC = "Salesforce/codegen-2B-mono"
 _CONFIG_FOR_DOC = "CodeGenConfig"
 
 
-# Copied from transformers.models.gptj.modeling_gptj.create_sinusoidal_positions
-def create_sinusoidal_positions(num_pos: int, dim: int) -> torch.Tensor:
-    inv_freq = 1.0 / (10000 ** (torch.arange(0, dim, 2, dtype=torch.int64) / dim))
-    sinusoid_inp = torch.einsum("i , j -> i j", torch.arange(num_pos, dtype=torch.int64).float(), inv_freq).float()
-    return torch.cat((torch.sin(sinusoid_inp), torch.cos(sinusoid_inp)), dim=1)
+# Copied from mindway.transformers.models.gptj.modeling_gptj.create_sinusoidal_positions
+def create_sinusoidal_positions(num_pos: int, dim: int) -> ms.Tensor:
+    inv_freq = 1.0 / (10000 ** (mint.arange(0, dim, 2, dtype=ms.int64) / dim))
+    sinusoid_inp = mint.einsum("i , j -> i j", mint.arange(num_pos, dtype=ms.int64).float(), inv_freq).float()
+    return mint.cat((ms.sin(sinusoid_inp), mint.cos(sinusoid_inp)), dim=1)
 
 
-# Copied from transformers.models.gptj.modeling_gptj.rotate_every_two
-def rotate_every_two(x: torch.Tensor) -> torch.Tensor:
+# Copied from mindway.transformers.models.gptj.modeling_gptj.rotate_every_two
+def rotate_every_two(x: ms.Tensor) -> ms.Tensor:
     x1 = x[:, :, :, ::2]
     x2 = x[:, :, :, 1::2]
-    x = torch.stack((-x2, x1), dim=-1)
+    x = mint.stack((-x2, x1), dim=-1)
     return x.flatten(-2)  # in einsum notation: rearrange(x, '... d j -> ... (d j)')
 
 
-# Copied from transformers.models.gptj.modeling_gptj.apply_rotary_pos_emb
-def apply_rotary_pos_emb(tensor: torch.Tensor, sin: torch.Tensor, cos: torch.Tensor) -> torch.Tensor:
-    sin = torch.repeat_interleave(sin[:, :, None, :], 2, 3)
-    cos = torch.repeat_interleave(cos[:, :, None, :], 2, 3)
+# Copied from mindway.transformers.models.gptj.modeling_gptj.apply_rotary_pos_emb
+def apply_rotary_pos_emb(tensor: ms.Tensor, sin: ms.Tensor, cos: ms.Tensor) -> ms.Tensor:
+    sin = mint.repeat_interleave(sin[:, :, None, :], 2, 3)
+    cos = mint.repeat_interleave(cos[:, :, None, :], 2, 3)
     return (tensor * cos) + (rotate_every_two(tensor) * sin)
 
 
@@ -93,7 +85,7 @@ class CodeGenAttention(nn.Module):
                 f"embed_dim must be divisible by num_attention_heads (got `embed_dim`: {self.embed_dim} and"
                 f" `num_attention_heads`: {self.num_attention_heads})."
             )
-        self.scale_attn = torch.sqrt(torch.tensor(self.head_dim, dtype=torch.float32)).to(torch.get_default_dtype())
+        self.scale_attn = mint.sqrt(ms.tensor(self.head_dim, dtype=ms.float32))
         self.qkv_proj = nn.Linear(self.embed_dim, self.embed_dim * 3, bias=False)
 
         self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
@@ -128,10 +120,10 @@ class CodeGenAttention(nn.Module):
         head_mask=None,
     ):
         # Keep the attention weights computation in fp32 to avoid overflow issues
-        query = query.to(torch.float32)
-        key = key.to(torch.float32)
+        query = query.to(ms.float32)
+        key = key.to(ms.float32)
 
-        attn_weights = torch.matmul(query, key.transpose(-1, -2))
+        attn_weights = mint.matmul(query, key.transpose(-1, -2))
 
         if attention_mask is not None:
             causal_mask = attention_mask[:, :, :, : key.shape[-2]]
@@ -146,23 +138,23 @@ class CodeGenAttention(nn.Module):
         if head_mask is not None:
             attn_weights = attn_weights * head_mask
 
-        attn_output = torch.matmul(attn_weights, value)
+        attn_output = mint.matmul(attn_weights, value)
 
         return attn_output, attn_weights
 
     def forward(
         self,
-        hidden_states: Optional[torch.FloatTensor],
+        hidden_states: Optional[ms.float32],
         layer_past: Optional[Cache] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[ms.float32] = None,
+        position_ids: Optional[ms.int64] = None,
+        head_mask: Optional[ms.float32] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
+        cache_position: Optional[ms.int64] = None,
     ) -> Union[
-        Tuple[torch.Tensor, Tuple[torch.Tensor]],
-        Optional[Tuple[torch.Tensor, Tuple[torch.Tensor], Tuple[torch.Tensor, ...]]],
+        Tuple[ms.Tensor, Tuple[ms.Tensor]],
+        Optional[Tuple[ms.Tensor, Tuple[ms.Tensor], Tuple[ms.Tensor, ...]]],
     ]:
         qkv = self.qkv_proj(hidden_states)
         # TODO(enijkamp): factor out number of logical TPU-v4 cores or make forward pass agnostic
@@ -170,7 +162,7 @@ class CodeGenAttention(nn.Module):
         qkv_split = qkv.reshape(qkv.shape[:-1] + (mp_num, -1))
 
         local_dim = self.head_dim * self.num_attention_heads // mp_num
-        query, value, key = torch.split(qkv_split, local_dim, dim=-1)
+        query, value, key = mint.split(qkv_split, local_dim, dim=-1)
         query = self._split_heads(query, self.num_attention_heads, self.head_dim, mp_num=mp_num)
         key = self._split_heads(key, self.num_attention_heads, self.head_dim, mp_num=mp_num)
 
@@ -183,7 +175,7 @@ class CodeGenAttention(nn.Module):
             self.embed_positions = embed_positions
 
         sincos = embed_positions[position_ids]
-        sin, cos = torch.split(sincos, sincos.shape[-1] // 2, dim=-1)
+        sin, cos = mint.split(sincos, sincos.shape[-1] // 2, dim=-1)
 
         if self.rotary_dim is not None:
             k_rot = key[:, :, :, : self.rotary_dim]
@@ -195,8 +187,8 @@ class CodeGenAttention(nn.Module):
             k_rot = apply_rotary_pos_emb(k_rot, sin, cos)
             q_rot = apply_rotary_pos_emb(q_rot, sin, cos)
 
-            key = torch.cat([k_rot, k_pass], dim=-1)
-            query = torch.cat([q_rot, q_pass], dim=-1)
+            key = mint.cat([k_rot, k_pass], dim=-1)
+            query = mint.cat([q_rot, q_pass], dim=-1)
         else:
             key = apply_rotary_pos_emb(key, sin, cos)
             query = apply_rotary_pos_emb(query, sin, cos)
@@ -229,7 +221,7 @@ class CodeGenAttention(nn.Module):
         return outputs  # a, present, (attentions)
 
 
-# Copied from transformers.models.gptj.modeling_gptj.GPTJMLP with GPTJ->CodeGen
+# Copied from mindway.transformers.models.gptj.modeling_gptj.GPTJMLP with GPTJ->CodeGen
 class CodeGenMLP(nn.Module):
     def __init__(self, intermediate_size, config):  # in MLP: intermediate_size= 4 * embed_dim
         super().__init__()
@@ -241,7 +233,7 @@ class CodeGenMLP(nn.Module):
         self.act = ACT2FN[config.activation_function]
         self.dropout = nn.Dropout(config.resid_pdrop)
 
-    def forward(self, hidden_states: Optional[torch.FloatTensor]) -> torch.FloatTensor:
+    def forward(self, hidden_states: Optional[ms.float32]) -> ms.float32:
         hidden_states = self.fc_in(hidden_states)
         hidden_states = self.act(hidden_states)
         hidden_states = self.fc_out(hidden_states)
@@ -249,7 +241,7 @@ class CodeGenMLP(nn.Module):
         return hidden_states
 
 
-# Copied from transformers.models.gptj.modeling_gptj.GPTJBlock with GPTJ->CodeGen
+# Copied from mindway.transformers.models.gptj.modeling_gptj.GPTJBlock with GPTJ->CodeGen
 class CodeGenBlock(nn.Module):
     # Ignore copy
     def __init__(self, config, layer_idx=None):
@@ -261,15 +253,15 @@ class CodeGenBlock(nn.Module):
 
     def forward(
         self,
-        hidden_states: Optional[torch.FloatTensor],
+        hidden_states: Optional[ms.float32],
         layer_past: Optional[Cache] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
+        attention_mask: Optional[ms.float32] = None,
+        position_ids: Optional[ms.int64] = None,
+        head_mask: Optional[ms.float32] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
-    ) -> Union[Tuple[torch.Tensor], Optional[Tuple[torch.Tensor, Tuple[torch.FloatTensor, ...]]]]:
+        cache_position: Optional[ms.int64] = None,
+    ) -> Union[Tuple[ms.Tensor], Optional[Tuple[ms.Tensor, Tuple[ms.float32, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
         attn_outputs = self.attn(
@@ -332,7 +324,7 @@ class CodeGenPreTrainedModel(PreTrainedModel):
 
 
 CODEGEN_START_DOCSTRING = r"""
-    This model is a PyTorch [torch.nn.Module](https://pytorch.org/docs/stable/nn.html#torch.nn.Module) sub-class. Use
+    This model is a PyTorch [ms.nn.Module](https://pyms.org/docs/stable/nn.html#ms.nn.Module) sub-class. Use
     it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage and
     behavior.
 
@@ -344,21 +336,21 @@ CODEGEN_START_DOCSTRING = r"""
 
 CODEGEN_INPUTS_DOCSTRING = r"""
     Args:
-        input_ids (`torch.LongTensor` of shape `({0})`):
+        input_ids (`ms.int64` of shape `({0})`):
             Indices of input sequence tokens in the vocabulary.
 
             Indices can be obtained using [`AutoProcenizer`]. See [`PreTrainedTokenizer.encode`] and
             [`PreTrainedTokenizer.__call__`] for details.
 
             [What are input IDs?](../glossary#input-ids)
-        attention_mask (`torch.FloatTensor` of shape `({0})`, *optional*):
+        attention_mask (`ms.float32` of shape `({0})`, *optional*):
             Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
 
             - 1 for tokens that are **not masked**,
             - 0 for tokens that are **masked**.
 
             [What are attention masks?](../glossary#attention-mask)
-        token_type_ids (`torch.LongTensor` of shape `({0})`, *optional*):
+        token_type_ids (`ms.int64` of shape `({0})`, *optional*):
             Segment token indices to indicate first and second portions of the inputs. Indices are selected in `[0,
             1]`:
 
@@ -366,22 +358,22 @@ CODEGEN_INPUTS_DOCSTRING = r"""
             - 1 corresponds to a *sentence B* token.
 
             [What are token type IDs?](../glossary#token-type-ids)
-        position_ids (`torch.LongTensor` of shape `({0})`, *optional*):
+        position_ids (`ms.int64` of shape `({0})`, *optional*):
             Indices of positions of each input sequence tokens in the position embeddings. Selected in the range `[0,
             config.n_positions - 1]`.
 
             [What are position IDs?](../glossary#position-ids)
-        head_mask (`torch.FloatTensor` of shape `(num_attention_heads,)` or `(n_layer, num_attention_heads)`, *optional*):
+        head_mask (`ms.float32` of shape `(num_attention_heads,)` or `(n_layer, num_attention_heads)`, *optional*):
             Mask to nullify selected heads of the self-attention modules. Mask values selected in `[0, 1]`:
 
             - 1 indicates the head is **not masked**,
             - 0 indicates the head is **masked**.
 
-        inputs_embeds (`torch.FloatTensor` of shape `({0}, hidden_dim)`, *optional*):
+        inputs_embeds (`ms.float32` of shape `({0}, hidden_dim)`, *optional*):
             Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation. This
             is useful if you want more control over how to convert *input_ids* indices into associated vectors than the
             model's internal embedding lookup matrix.
-        past_key_values (`Cache` or `tuple(tuple(torch.FloatTensor))`, *optional*):
+        past_key_values (`Cache` or `tuple(tuple(ms.float32))`, *optional*):
             Pre-computed hidden-states (key and values in the self-attention blocks and in the cross-attention
             blocks) that can be used to speed up sequential decoding. This typically consists in the `past_key_values`
             returned by the model at a previous stage of decoding, when `use_cache=True` or `config.use_cache=True`.
@@ -389,7 +381,7 @@ CODEGEN_INPUTS_DOCSTRING = r"""
             Two formats are allowed:
             - a [`~cache_utils.Cache`] instance, see our
             [kv cache guide](https://huggingface.co/docs/transformers/en/kv_cache);
-            - Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of
+            - Tuple of `tuple(ms.float32)` of length `config.n_layers`, with each tuple having 2 tensors of
             shape `(batch_size, num_heads, sequence_length, embed_size_per_head)`). This is also known as the legacy
             cache format.
 
@@ -407,7 +399,7 @@ CODEGEN_INPUTS_DOCSTRING = r"""
             more detail.
         return_dict (`bool`, *optional*):
             Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
-        cache_position (`torch.LongTensor` of shape `(sequence_length)`, *optional*):
+        cache_position (`ms.int64` of shape `(sequence_length)`, *optional*):
             Indices depicting the position of the input sequence tokens in the sequence. Contrarily to `position_ids`,
             this tensor is not affected by padding. It is used to update the cache in the correct position and to infer
             the complete sequence length.
@@ -449,18 +441,18 @@ class CodeGenModel(CodeGenPreTrainedModel):
     )
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Union[Cache, Tuple[Tuple[torch.Tensor]]]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
+        input_ids: Optional[ms.int64] = None,
+        past_key_values: Optional[Union[Cache, Tuple[Tuple[ms.Tensor]]]] = None,
+        attention_mask: Optional[ms.float32] = None,
+        token_type_ids: Optional[ms.int64] = None,
+        position_ids: Optional[ms.int64] = None,
+        head_mask: Optional[ms.float32] = None,
+        inputs_embeds: Optional[ms.float32] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
+        cache_position: Optional[ms.int64] = None,
         **kwargs,  # NOOP kwargs, for now
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -500,7 +492,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
         seq_length = inputs_embeds.shape[1]
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = torch.arange(past_seen_tokens, past_seen_tokens + seq_length, device=inputs_embeds.device)
+            cache_position = ms.arange(past_seen_tokens, past_seen_tokens + seq_length, device=inputs_embeds.device)
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
@@ -585,12 +577,12 @@ class CodeGenModel(CodeGenPreTrainedModel):
             attentions=all_self_attentions,
         )
 
-    # Copied from transformers.models.llama.modeling_llama.LlamaModel._update_causal_mask
+    # Copied from mindway.transformers.models.llama.modeling_llama.LlamaModel._update_causal_mask
     def _update_causal_mask(
         self,
-        attention_mask: torch.Tensor,
-        input_tensor: torch.Tensor,
-        cache_position: torch.Tensor,
+        attention_mask: ms.Tensor,
+        input_tensor: ms.Tensor,
+        cache_position: ms.Tensor,
         past_key_values: Cache,
         output_attentions: bool = False,
     ):
@@ -599,7 +591,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
                 return attention_mask
             return None
         if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, torch.Tensor):
+            if isinstance(attention_mask, ms.Tensor):
                 attention_mask = make_flex_block_causal_mask(attention_mask)
             if isinstance(attention_mask, BlockMask):
                 return attention_mask
@@ -627,7 +619,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
         else:
             target_length = (
                 attention_mask.shape[-1]
-                if isinstance(attention_mask, torch.Tensor)
+                if isinstance(attention_mask, ms.Tensor)
                 else past_seen_tokens + sequence_length + 1
             )
 
@@ -651,20 +643,20 @@ class CodeGenModel(CodeGenPreTrainedModel):
             # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
             # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
             # Details: https://github.com/pytorch/pytorch/issues/110213
-            min_dtype = torch.finfo(dtype).min
+            min_dtype = ms.finfo(dtype).min
             causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
 
         return causal_mask
 
     @staticmethod
-    # Copied from transformers.models.llama.modeling_llama.LlamaPreTrainedModel._prepare_4d_causal_attention_mask_with_cache_position
+    # Copied from mindway.transformers.models.llama.modeling_llama.LlamaPreTrainedModel._prepare_4d_causal_attention_mask_with_cache_position
     def _prepare_4d_causal_attention_mask_with_cache_position(
-        attention_mask: torch.Tensor,
+        attention_mask: ms.Tensor,
         sequence_length: int,
         target_length: int,
-        dtype: torch.dtype,
-        device: torch.device,
-        cache_position: torch.Tensor,
+        dtype: ms.dtype,
+        device: ms.device,
+        cache_position: ms.Tensor,
         batch_size: int,
         **kwargs,
     ):
@@ -673,7 +665,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
         `(batch_size, key_value_length)`, or if the input `attention_mask` is already 4D, do nothing.
 
         Args:
-            attention_mask (`torch.Tensor`):
+            attention_mask (`ms.Tensor`):
                 A 2D attention mask of shape `(batch_size, key_value_length)` or a 4D attention mask of shape
                 `(batch_size, 1, query_length, key_value_length)`.
             sequence_length (`int`):
@@ -681,26 +673,26 @@ class CodeGenModel(CodeGenPreTrainedModel):
             target_length (`int`):
                 The target length: when generating with static cache, the mask should be as long as the static cache,
                 to account for the 0 padding, the part of the cache that is not filled yet.
-            dtype (`torch.dtype`):
+            dtype (`ms.dtype`):
                 The dtype to use for the 4D attention mask.
-            device (`torch.device`):
+            device (`ms.device`):
                 The device to place the 4D attention mask on.
-            cache_position (`torch.Tensor`):
+            cache_position (`ms.Tensor`):
                 Indices depicting the position of the input sequence tokens in the sequence.
-            batch_size (`torch.Tensor`):
+            batch_size (`ms.Tensor`):
                 Batch size.
         """
         if attention_mask is not None and attention_mask.dim() == 4:
             # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
             causal_mask = attention_mask
         else:
-            min_dtype = torch.finfo(dtype).min
-            causal_mask = torch.full(
+            min_dtype = ms.finfo(dtype).min
+            causal_mask = ms.full(
                 (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device
             )
             if sequence_length != 1:
-                causal_mask = torch.triu(causal_mask, diagonal=1)
-            causal_mask *= torch.arange(target_length, device=device) > cache_position.reshape(-1, 1)
+                causal_mask = ms.triu(causal_mask, diagonal=1)
+            causal_mask *= ms.arange(target_length, device=device) > cache_position.reshape(-1, 1)
             causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
             if attention_mask is not None:
                 causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
@@ -747,23 +739,23 @@ class CodeGenForCausalLM(CodeGenPreTrainedModel, GenerationMixin):
     )
     def forward(
         self,
-        input_ids: Optional[torch.LongTensor] = None,
-        past_key_values: Optional[Union[Cache, Tuple[Tuple[torch.Tensor]]]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        token_type_ids: Optional[torch.LongTensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
+        input_ids: Optional[ms.int64] = None,
+        past_key_values: Optional[Union[Cache, Tuple[Tuple[ms.Tensor]]]] = None,
+        attention_mask: Optional[ms.float32] = None,
+        token_type_ids: Optional[ms.int64] = None,
+        position_ids: Optional[ms.int64] = None,
+        head_mask: Optional[ms.float32] = None,
+        inputs_embeds: Optional[ms.float32] = None,
+        labels: Optional[ms.int64] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
+        cache_position: Optional[ms.int64] = None,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
-        labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
+        labels (`ms.int64` of shape `(batch_size, sequence_length)`, *optional*):
             Labels for language modeling. Note that the labels **are shifted** inside the model, i.e. you can set
             `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`
             are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
@@ -789,7 +781,7 @@ class CodeGenForCausalLM(CodeGenPreTrainedModel, GenerationMixin):
         # make sure sampling in fp16 works correctly and
         # compute loss in fp32 to match with mesh-tf version
         # https://github.com/EleutherAI/gpt-neo/blob/89ce74164da2fb16179106f54e2269b5da8db333/models/gpt2/gpt2.py#L179
-        lm_logits = self.lm_head(hidden_states).to(torch.float32)
+        lm_logits = self.lm_head(hidden_states).to(ms.float32)
 
         loss = None
         if labels is not None:
@@ -819,8 +811,8 @@ class CodeGenForCausalLM(CodeGenPreTrainedModel, GenerationMixin):
 
     @staticmethod
     def _reorder_cache(
-        past_key_values: Tuple[Tuple[torch.Tensor]], beam_idx: torch.Tensor
-    ) -> Tuple[Tuple[torch.Tensor]]:
+        past_key_values: Tuple[Tuple[ms.Tensor]], beam_idx: ms.Tensor
+    ) -> Tuple[Tuple[ms.Tensor]]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PretrainedModel.beam_search`] or
         [`~PretrainedModel.beam_sample`] is called. This is required to match `past_key_values` with the correct

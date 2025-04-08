@@ -79,7 +79,7 @@ class CodeGenConfig(PretrainedConfig):
     Example:
 
     ```python
-    >>> from transformers import CodeGenConfig, CodeGenModel
+    >>> from mindway.transformers import CodeGenConfig, CodeGenModel
 
     >>> # Initializing a CodeGen 6B configuration
     >>> configuration = CodeGenConfig()
@@ -145,7 +145,7 @@ class CodeGenConfig(PretrainedConfig):
         )
 
 
-# Copied from transformers.models.gpt2.configuration_gpt2.GPT2OnnxConfig
+# Copied from mindway.transformers.models.gpt2.configuration_gpt2.GPT2OnnxConfig
 class CodeGenOnnxConfig(OnnxConfigWithPast):
     def __init__(
         self,

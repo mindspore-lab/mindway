@@ -82,7 +82,7 @@ class CodeGenTokenizer(PreTrainedTokenizer):
     be encoded differently whether it is at the beginning of the sentence (without space) or not:
 
     ```python
-    >>> from transformers import CodeGenTokenizer
+    >>> from mindway.transformers import CodeGenTokenizer
 
     >>> tokenizer = CodeGenTokenizer.from_pretrained("Salesforce/codegen-350M-mono")
     >>> tokenizer("Hello world")["input_ids"]
