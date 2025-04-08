@@ -19,9 +19,9 @@ import os
 import re
 import unittest
 
-from transformers import CodeGenTokenizer, CodeGenTokenizerFast
-from transformers.models.codegen.tokenization_codegen import VOCAB_FILES_NAMES
-from transformers.testing_utils import require_tokenizers, slow
+from mindway.transformers import CodeGenTokenizer, CodeGenTokenizerFast
+from mindway.transformers.models.codegen.tokenization_codegen import VOCAB_FILES_NAMES
+from mindway.transformers.testing_utils import require_tokenizers, slow
 
 from ...test_tokenization_common import TokenizerTesterMixin
 
