@@ -17,7 +17,9 @@
 import datetime
 import unittest
 
-from mindway.transformers import CodeGenConfig, is_mindspore_available
+from transformers import CodeGenConfig
+
+from mindway.transformers import is_mindspore_available
 from mindway.transformers.file_utils import cached_property
 from mindway.transformers.testing_utils import is_flaky, slow, require_mindspore
 from mindway.transformers.trainer_utils import set_seed

@@ -44,7 +44,7 @@ pipeline_test_mapping = {
     "text-generation": {"test": TextGenerationPipelineTests},
 }
 
-from mindway.transformers.models.auto.processing_auto import PROCESSOR_MAPPING_NAMES
+from transformers.models.auto.processing_auto import PROCESSOR_MAPPING_NAMES
 from mindway.transformers.testing_utils import (
     require_mindspore,
     is_pipeline_test
