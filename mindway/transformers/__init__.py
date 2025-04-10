@@ -46,9 +46,6 @@ from .models.clip import (
     CLIPVisionModelWithProjection,
 )
 from .models.codegen import (
-    CodeGenConfig,
-    CodeGenTokenizer,
-    CodeGenTokenizerFast,
     CodeGenForCausalLM,
     CodeGenModel,
     CodeGenPreTrainedModel
