@@ -21,19 +21,18 @@ from transformers import CodeGenConfig
 
 from mindway.transformers import is_mindspore_available
 from mindway.transformers.file_utils import cached_property
-from mindway.transformers.testing_utils import is_flaky, slow, require_mindspore
+from mindway.transformers.testing_utils import is_flaky, require_mindspore, slow
 from mindway.transformers.trainer_utils import set_seed
 
-from ...generation.test_utils import GenerationTesterMixin
 from ...test_configuration_common import ConfigTester
-from ...test_modeling_common import ModelTesterMixin, ids_tensor, random_attention_mask
-from ...test_pipeline_mixin import PipelineTesterMixin
-
+from ...test_modeling_common import ids_tensor, random_attention_mask
 
 if is_mindspore_available():
+    from transformers import AutoTokenizer
+
     import mindspore as ms
     from mindspore import mint
-    from transformers import AutoTokenizer
+
     from mindway.transformers import CodeGenForCausalLM, CodeGenModel
 
 
@@ -316,7 +315,7 @@ class CodeGenModelTester:
 
 
 @require_mindspore
-class CodeGenModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMixin, unittest.TestCase):
+class CodeGenModelTest(unittest.TestCase):
     all_model_classes = (CodeGenModel, CodeGenForCausalLM) if is_mindspore_available() else ()
     all_generative_model_classes = (CodeGenForCausalLM,) if is_mindspore_available() else ()
     pipeline_model_mapping = (
@@ -388,10 +387,7 @@ class CodeGenModelTest(ModelTesterMixin, GenerationTesterMixin, PipelineTesterMi
             dim=-1,
         )
 
-        outputs = model.generate(
-            input_ids=input_ids,
-            attention_mask=inputs["attention_mask"]
-        )
+        outputs = model.generate(input_ids=input_ids, attention_mask=inputs["attention_mask"])
 
         outputs_tt = model.generate(
             input_ids=input_ids,
