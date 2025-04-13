@@ -16,23 +16,21 @@
 
 from typing import Optional, Tuple, Union
 
+from transformers import CodeGenConfig
+from transformers.utils import add_code_sample_docstrings, add_start_docstrings, add_start_docstrings_to_model_forward
+
 import mindspore as ms
-from mindspore import nn, mint
+from mindspore import mint, nn, ops
+from mindspore.nn import CrossEntropyLoss
 
 from ...activations import ACT2FN
 from ...cache_utils import Cache, DynamicCache, StaticCache
 from ...generation import GenerationMixin
-from ...modeling_attn_mask_utils import AttentionMaskConverter
+from ...mindspore_adapter import recompute_except_output
+from ...modeling_attn_mask_utils import AttentionMaskConverter, dtype_to_min
 from ...modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from ...modeling_utils import MSPreTrainedModel as PreTrainedModel
-from ...utils import (
-    add_code_sample_docstrings,
-    add_start_docstrings,
-    add_start_docstrings_to_model_forward,
-    logging,
-)
-from .configuration_codegen import CodeGenConfig
-
+from ...utils import logging
 
 logger = logging.get_logger(__name__)
 
@@ -44,7 +42,7 @@ _CONFIG_FOR_DOC = "CodeGenConfig"
 def create_sinusoidal_positions(num_pos: int, dim: int) -> ms.Tensor:
     inv_freq = 1.0 / (10000 ** (mint.arange(0, dim, 2, dtype=ms.int64) / dim))
     sinusoid_inp = mint.einsum("i , j -> i j", mint.arange(num_pos, dtype=ms.int64).float(), inv_freq).float()
-    return mint.cat((ms.sin(sinusoid_inp), mint.cos(sinusoid_inp)), dim=1)
+    return mint.cat((mint.sin(sinusoid_inp), mint.cos(sinusoid_inp)), dim=1)
 
 
 # Copied from mindway.transformers.models.gptj.modeling_gptj.rotate_every_two
@@ -62,13 +60,13 @@ def apply_rotary_pos_emb(tensor: ms.Tensor, sin: ms.Tensor, cos: ms.Tensor) -> m
     return (tensor * cos) + (rotate_every_two(tensor) * sin)
 
 
-class CodeGenAttention(nn.Module):
+class CodeGenAttention(nn.Cell):
     def __init__(self, config, layer_idx=None):
         super().__init__()
 
         max_positions = config.max_position_embeddings
-        self.attn_dropout = nn.Dropout(config.attn_pdrop)
-        self.resid_dropout = nn.Dropout(config.resid_pdrop)
+        self.attn_dropout = nn.Dropout(p=config.attn_pdrop)
+        self.resid_dropout = nn.Dropout(p=config.resid_pdrop)
         self.layer_idx = layer_idx
         if layer_idx is None:
             logger.warning_once(
@@ -85,10 +83,10 @@ class CodeGenAttention(nn.Module):
                 f"embed_dim must be divisible by num_attention_heads (got `embed_dim`: {self.embed_dim} and"
                 f" `num_attention_heads`: {self.num_attention_heads})."
             )
-        self.scale_attn = mint.sqrt(ms.tensor(self.head_dim, dtype=ms.float32))
-        self.qkv_proj = nn.Linear(self.embed_dim, self.embed_dim * 3, bias=False)
+        self.scale_attn = mint.sqrt(ms.Tensor(self.head_dim, dtype=ms.float32))
+        self.qkv_proj = mint.nn.Linear(self.embed_dim, self.embed_dim * 3, bias=False)
 
-        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=False)
+        self.out_proj = mint.nn.Linear(self.embed_dim, self.embed_dim, bias=False)
         self.rotary_dim = config.rotary_dim
         pos_embd_dim = self.rotary_dim or self.embed_dim
         self.embed_positions = create_sinusoidal_positions(max_positions, pos_embd_dim)
@@ -108,7 +106,7 @@ class CodeGenAttention(nn.Module):
             tensor = tensor.permute(0, 2, 1, 3).contiguous()
         else:
             raise ValueError(f"Input tensor rank should be one of [4, 5], but is: {len(tensor.shape)}")
-        new_shape = tensor.size()[:-2] + (num_attention_heads * attn_head_size,)
+        new_shape = tensor.shape[:-2] + (num_attention_heads * attn_head_size,)
         return tensor.view(new_shape)
 
     def _attn(
@@ -130,7 +128,7 @@ class CodeGenAttention(nn.Module):
             attn_weights += causal_mask
 
         attn_weights = attn_weights / self.scale_attn
-        attn_weights = nn.Softmax(dim=-1)(attn_weights)
+        attn_weights = nn.Softmax(axis=-1)(attn_weights)
         attn_weights = attn_weights.to(value.dtype)
         attn_weights = self.attn_dropout(attn_weights)
 
@@ -142,16 +140,16 @@ class CodeGenAttention(nn.Module):
 
         return attn_output, attn_weights
 
-    def forward(
+    def construct(
         self,
-        hidden_states: Optional[ms.float32],
+        hidden_states: Optional[ms.Tensor],
         layer_past: Optional[Cache] = None,
-        attention_mask: Optional[ms.float32] = None,
-        position_ids: Optional[ms.int64] = None,
-        head_mask: Optional[ms.float32] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        head_mask: Optional[ms.Tensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
-        cache_position: Optional[ms.int64] = None,
+        cache_position: Optional[ms.Tensor] = None,
     ) -> Union[
         Tuple[ms.Tensor, Tuple[ms.Tensor]],
         Optional[Tuple[ms.Tensor, Tuple[ms.Tensor], Tuple[ms.Tensor, ...]]],
@@ -170,9 +168,9 @@ class CodeGenAttention(nn.Module):
         value = value.permute(0, 2, 1, 3)
 
         embed_positions = self.embed_positions
-        if embed_positions.device != position_ids.device:
-            embed_positions = embed_positions.to(position_ids.device)
-            self.embed_positions = embed_positions
+        # if embed_positions.device != position_ids.device:
+        #     embed_positions = embed_positions.to(position_ids.device)
+        #     self.embed_positions = embed_positions
 
         sincos = embed_positions[position_ids]
         sin, cos = mint.split(sincos, sincos.shape[-1] // 2, dim=-1)
@@ -184,8 +182,8 @@ class CodeGenAttention(nn.Module):
             q_rot = query[:, :, :, : self.rotary_dim]
             q_pass = query[:, :, :, self.rotary_dim :]
 
-            k_rot = apply_rotary_pos_emb(k_rot, sin, cos)
-            q_rot = apply_rotary_pos_emb(q_rot, sin, cos)
+            k_rot = apply_rotary_pos_emb(k_rot, sin, cos).to(k_rot.dtype)
+            q_rot = apply_rotary_pos_emb(q_rot, sin, cos).to(q_rot.dtype)
 
             key = mint.cat([k_rot, k_pass], dim=-1)
             query = mint.cat([q_rot, q_pass], dim=-1)
@@ -222,18 +220,18 @@ class CodeGenAttention(nn.Module):
 
 
 # Copied from mindway.transformers.models.gptj.modeling_gptj.GPTJMLP with GPTJ->CodeGen
-class CodeGenMLP(nn.Module):
+class CodeGenMLP(nn.Cell):
     def __init__(self, intermediate_size, config):  # in MLP: intermediate_size= 4 * embed_dim
         super().__init__()
         embed_dim = config.n_embd
 
-        self.fc_in = nn.Linear(embed_dim, intermediate_size)
-        self.fc_out = nn.Linear(intermediate_size, embed_dim)
+        self.fc_in = mint.nn.Linear(embed_dim, intermediate_size)
+        self.fc_out = mint.nn.Linear(intermediate_size, embed_dim)
 
         self.act = ACT2FN[config.activation_function]
-        self.dropout = nn.Dropout(config.resid_pdrop)
+        self.dropout = nn.Dropout(p=config.resid_pdrop)
 
-    def forward(self, hidden_states: Optional[ms.float32]) -> ms.float32:
+    def construct(self, hidden_states: Optional[ms.Tensor]) -> ms.Tensor:
         hidden_states = self.fc_in(hidden_states)
         hidden_states = self.act(hidden_states)
         hidden_states = self.fc_out(hidden_states)
@@ -242,26 +240,26 @@ class CodeGenMLP(nn.Module):
 
 
 # Copied from mindway.transformers.models.gptj.modeling_gptj.GPTJBlock with GPTJ->CodeGen
-class CodeGenBlock(nn.Module):
+class CodeGenBlock(nn.Cell):
     # Ignore copy
     def __init__(self, config, layer_idx=None):
         super().__init__()
         inner_dim = config.n_inner if config.n_inner is not None else 4 * config.n_embd
-        self.ln_1 = nn.LayerNorm(config.n_embd, eps=config.layer_norm_epsilon)
+        self.ln_1 = nn.LayerNorm((config.n_embd,), epsilon=config.layer_norm_epsilon)
         self.attn = CodeGenAttention(config, layer_idx)
         self.mlp = CodeGenMLP(inner_dim, config)
 
-    def forward(
+    def construct(
         self,
-        hidden_states: Optional[ms.float32],
+        hidden_states: Optional[ms.Tensor],
         layer_past: Optional[Cache] = None,
-        attention_mask: Optional[ms.float32] = None,
-        position_ids: Optional[ms.int64] = None,
-        head_mask: Optional[ms.float32] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        head_mask: Optional[ms.Tensor] = None,
         use_cache: Optional[bool] = False,
         output_attentions: Optional[bool] = False,
-        cache_position: Optional[ms.int64] = None,
-    ) -> Union[Tuple[ms.Tensor], Optional[Tuple[ms.Tensor, Tuple[ms.float32, ...]]]]:
+        cache_position: Optional[ms.Tensor] = None,
+    ) -> Union[Tuple[ms.Tensor], Optional[Tuple[ms.Tensor, Tuple[ms.Tensor, ...]]]]:
         residual = hidden_states
         hidden_states = self.ln_1(hidden_states)
         attn_outputs = self.attn(
@@ -315,16 +313,16 @@ class CodeGenPreTrainedModel(PreTrainedModel):
             if module.bias is not None:
                 module.bias.data.zero_()
         elif isinstance(module, nn.Embedding):
-            module.weight.data.normal_(mean=0.0, std=self.config.initializer_range)
+            module.embedding_table.data.normal_(mean=0.0, std=self.config.initializer_range)
             if module.padding_idx is not None:
-                module.weight.data[module.padding_idx].zero_()
+                module.embedding_table.data[module.padding_idx].zero_()
         elif isinstance(module, nn.LayerNorm):
-            module.bias.data.zero_()
-            module.weight.data.fill_(1.0)
+            module.beta.data.zero_()
+            module.gamma.data.fill_(1.0)
 
 
 CODEGEN_START_DOCSTRING = r"""
-    This model is a PyTorch [ms.nn.Module](https://pyms.org/docs/stable/nn.html#ms.nn.Module) sub-class. Use
+    This model is a PyTorch [ms.nn.Cell](https://pyms.org/docs/stable/nn.html#ms.nn.Cell) sub-class. Use
     it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general usage and
     behavior.
 
@@ -417,9 +415,9 @@ class CodeGenModel(CodeGenPreTrainedModel):
         self.embed_dim = config.n_embd
         self.vocab_size = config.vocab_size
         self.wte = nn.Embedding(config.vocab_size, self.embed_dim)
-        self.drop = nn.Dropout(config.embd_pdrop)
-        self.h = nn.ModuleList([CodeGenBlock(config, layer_idx=i) for i in range(config.n_layer)])
-        self.ln_f = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_epsilon)
+        self.drop = nn.Dropout(p=config.embd_pdrop)
+        self.h = nn.CellList([CodeGenBlock(config, layer_idx=i) for i in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm((self.embed_dim,), epsilon=config.layer_norm_epsilon)
         self.rotary_dim = min(config.rotary_dim, config.n_ctx // config.num_attention_heads)
 
         self.gradient_checkpointing = False
@@ -433,26 +431,45 @@ class CodeGenModel(CodeGenPreTrainedModel):
     def set_input_embeddings(self, new_embeddings):
         self.wte = new_embeddings
 
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        if gradient_checkpointing_kwargs is None:
+            # gradient_checkpointing_kwargs = {"mp_comm_recompute": True, "parallel_optimizer_comm_recompute": True}
+            gradient_checkpointing_kwargs = {}
+
+        # llama layers
+        for decoder_layer in self.h:
+            # assert isinstance(decoder_layer, nn.Embedding)
+            for name, cell in decoder_layer.name_cells().items():
+                if "output_identity" in name:
+                    assert isinstance(cell, nn.Identity)
+                    pass
+                else:
+                    # cell._recompute()
+                    recompute_except_output(cell, **gradient_checkpointing_kwargs)
+        recompute_except_output(self.wte, **gradient_checkpointing_kwargs)
+
+        logger.info(f"{self.__class__.__name__}: enable recompute.")
+
     @add_start_docstrings_to_model_forward(CODEGEN_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=BaseModelOutputWithPast,
         config_class=_CONFIG_FOR_DOC,
     )
-    def forward(
+    def construct(
         self,
-        input_ids: Optional[ms.int64] = None,
+        input_ids: Optional[ms.Tensor] = None,
         past_key_values: Optional[Union[Cache, Tuple[Tuple[ms.Tensor]]]] = None,
-        attention_mask: Optional[ms.float32] = None,
-        token_type_ids: Optional[ms.int64] = None,
-        position_ids: Optional[ms.int64] = None,
-        head_mask: Optional[ms.float32] = None,
-        inputs_embeds: Optional[ms.float32] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        token_type_ids: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        head_mask: Optional[ms.Tensor] = None,
+        inputs_embeds: Optional[ms.Tensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        cache_position: Optional[ms.int64] = None,
+        cache_position: Optional[ms.Tensor] = None,
         **kwargs,  # NOOP kwargs, for now
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -462,7 +479,10 @@ class CodeGenModel(CodeGenPreTrainedModel):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        if (input_ids is None) ^ (inputs_embeds is not None):
+        if input_ids is None:
+            raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
+
+        if inputs_embeds is not None:
             raise ValueError("You must specify exactly one of input_ids or inputs_embeds")
 
         if self.gradient_checkpointing and self.training:
@@ -492,7 +512,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
         seq_length = inputs_embeds.shape[1]
         if cache_position is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = ms.arange(past_seen_tokens, past_seen_tokens + seq_length, device=inputs_embeds.device)
+            cache_position = mint.arange(past_seen_tokens, past_seen_tokens + seq_length)
 
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
@@ -514,7 +534,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
             hidden_states = hidden_states + token_type_embeds
 
         hidden_states = self.drop(hidden_states)
-        output_shape = (-1, seq_length, hidden_states.size(-1))
+        output_shape = (-1, seq_length, hidden_states.shape[-1])
 
         next_decoder_cache = None
         all_self_attentions = () if output_attentions else None
@@ -590,11 +610,11 @@ class CodeGenModel(CodeGenPreTrainedModel):
             if attention_mask is not None and (attention_mask == 0.0).any():
                 return attention_mask
             return None
-        if self.config._attn_implementation == "flex_attention":
-            if isinstance(attention_mask, ms.Tensor):
-                attention_mask = make_flex_block_causal_mask(attention_mask)
-            if isinstance(attention_mask, BlockMask):
-                return attention_mask
+        # if self.config._attn_implementation == "flex_attention":
+        #     if isinstance(attention_mask, ms.Tensor):
+        #         attention_mask = make_flex_block_causal_mask(attention_mask)
+        #     if isinstance(attention_mask, BlockMask):
+        #         return attention_mask
 
         # For SDPA, when possible, we will rely on its `is_causal` argument instead of its `attn_mask` argument, in
         # order to dispatch on Flash Attention 2. This feature is not compatible with static cache, as SDPA will fail
@@ -612,7 +632,7 @@ class CodeGenModel(CodeGenPreTrainedModel):
             ):
                 return None
 
-        dtype, device = input_tensor.dtype, input_tensor.device
+        dtype = input_tensor.dtype
         sequence_length = input_tensor.shape[1]
         if using_static_cache:
             target_length = past_key_values.get_max_cache_shape()
@@ -629,21 +649,15 @@ class CodeGenModel(CodeGenPreTrainedModel):
             sequence_length=sequence_length,
             target_length=target_length,
             dtype=dtype,
-            device=device,
             cache_position=cache_position,
             batch_size=input_tensor.shape[0],
         )
 
-        if (
-            self.config._attn_implementation == "sdpa"
-            and attention_mask is not None
-            and attention_mask.device.type in ["cuda", "xpu"]
-            and not output_attentions
-        ):
+        if self.config._attn_implementation == "sdpa" and attention_mask is not None and not output_attentions:
             # Attend to all tokens in fully masked rows in the causal_mask, for example the relevant first rows when
             # using left padding. This is required by F.scaled_dot_product_attention memory-efficient attention path.
             # Details: https://github.com/pytorch/pytorch/issues/110213
-            min_dtype = ms.finfo(dtype).min
+            min_dtype = dtype_to_min(dtype)
             causal_mask = AttentionMaskConverter._unmask_unattended(causal_mask, min_dtype)
 
         return causal_mask
@@ -655,7 +669,6 @@ class CodeGenModel(CodeGenPreTrainedModel):
         sequence_length: int,
         target_length: int,
         dtype: ms.dtype,
-        device: ms.device,
         cache_position: ms.Tensor,
         batch_size: int,
         **kwargs,
@@ -675,8 +688,6 @@ class CodeGenModel(CodeGenPreTrainedModel):
                 to account for the 0 padding, the part of the cache that is not filled yet.
             dtype (`ms.dtype`):
                 The dtype to use for the 4D attention mask.
-            device (`ms.device`):
-                The device to place the 4D attention mask on.
             cache_position (`ms.Tensor`):
                 Indices depicting the position of the input sequence tokens in the sequence.
             batch_size (`ms.Tensor`):
@@ -686,20 +697,16 @@ class CodeGenModel(CodeGenPreTrainedModel):
             # In this case we assume that the mask comes already in inverted form and requires no inversion or slicing.
             causal_mask = attention_mask
         else:
-            min_dtype = ms.finfo(dtype).min
-            causal_mask = ms.full(
-                (sequence_length, target_length), fill_value=min_dtype, dtype=dtype, device=device
-            )
+            min_dtype = dtype_to_min(dtype)
+            causal_mask = ops.full((sequence_length, target_length), fill_value=min_dtype, dtype=dtype)
             if sequence_length != 1:
-                causal_mask = ms.triu(causal_mask, diagonal=1)
-            causal_mask *= ms.arange(target_length, device=device) > cache_position.reshape(-1, 1)
-            causal_mask = causal_mask[None, None, :, :].expand(batch_size, 1, -1, -1)
+                causal_mask = mint.triu(causal_mask, diagonal=1)
+            causal_mask *= mint.arange(target_length) > cache_position.reshape(-1, 1)
+            causal_mask = causal_mask[None, None, :, :].broadcast_to((batch_size, 1, -1, -1))
             if attention_mask is not None:
                 causal_mask = causal_mask.clone()  # copy to contiguous memory for in-place edit
                 mask_length = attention_mask.shape[-1]
-                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :].to(
-                    causal_mask.device
-                )
+                padding_mask = causal_mask[:, :, :, :mask_length] + attention_mask[:, None, None, :]
                 padding_mask = padding_mask == 0
                 causal_mask[:, :, :, :mask_length] = causal_mask[:, :, :, :mask_length].masked_fill(
                     padding_mask, min_dtype
@@ -720,7 +727,7 @@ class CodeGenForCausalLM(CodeGenPreTrainedModel, GenerationMixin):
     def __init__(self, config):
         super().__init__(config)
         self.transformer = CodeGenModel(config)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size)
+        self.lm_head = mint.nn.Linear(config.n_embd, config.vocab_size)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -731,27 +738,30 @@ class CodeGenForCausalLM(CodeGenPreTrainedModel, GenerationMixin):
     def set_output_embeddings(self, new_embeddings):
         self.lm_head = new_embeddings
 
+    def gradient_checkpointing_enable(self, gradient_checkpointing_kwargs=None):
+        self.transformer.gradient_checkpointing_enable(gradient_checkpointing_kwargs)
+
     @add_start_docstrings_to_model_forward(CODEGEN_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         checkpoint=_CHECKPOINT_FOR_DOC,
         output_type=CausalLMOutputWithPast,
         config_class=_CONFIG_FOR_DOC,
     )
-    def forward(
+    def construct(
         self,
-        input_ids: Optional[ms.int64] = None,
+        input_ids: Optional[ms.Tensor] = None,
         past_key_values: Optional[Union[Cache, Tuple[Tuple[ms.Tensor]]]] = None,
-        attention_mask: Optional[ms.float32] = None,
-        token_type_ids: Optional[ms.int64] = None,
-        position_ids: Optional[ms.int64] = None,
-        head_mask: Optional[ms.float32] = None,
-        inputs_embeds: Optional[ms.float32] = None,
-        labels: Optional[ms.int64] = None,
+        attention_mask: Optional[ms.Tensor] = None,
+        token_type_ids: Optional[ms.Tensor] = None,
+        position_ids: Optional[ms.Tensor] = None,
+        head_mask: Optional[ms.Tensor] = None,
+        inputs_embeds: Optional[ms.Tensor] = None,
+        labels: Optional[ms.Tensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        cache_position: Optional[ms.int64] = None,
+        cache_position: Optional[ms.Tensor] = None,
         **kwargs,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
@@ -785,15 +795,13 @@ class CodeGenForCausalLM(CodeGenPreTrainedModel, GenerationMixin):
 
         loss = None
         if labels is not None:
-            # move labels to correct device to enable model parallelism
-            labels = labels.to(lm_logits.device)
+            labels = labels.to(ms.int32)
+            # Shift so that tokens < n predict n
+            shift_logits = lm_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
             # Flatten the tokens
-            loss = self.loss_function(
-                lm_logits,
-                labels,
-                vocab_size=self.config.vocab_size,
-                **kwargs,
-            )
+            loss_fct = CrossEntropyLoss()
+            loss = loss_fct(shift_logits.view(-1, shift_logits.shape[-1]), shift_labels.view(-1))
 
             loss = loss.to(hidden_states.dtype)
 
@@ -810,17 +818,14 @@ class CodeGenForCausalLM(CodeGenPreTrainedModel, GenerationMixin):
         )
 
     @staticmethod
-    def _reorder_cache(
-        past_key_values: Tuple[Tuple[ms.Tensor]], beam_idx: ms.Tensor
-    ) -> Tuple[Tuple[ms.Tensor]]:
+    def _reorder_cache(past_key_values: Tuple[Tuple[ms.Tensor]], beam_idx: ms.Tensor) -> Tuple[Tuple[ms.Tensor]]:
         """
         This function is used to re-order the `past_key_values` cache if [`~PretrainedModel.beam_search`] or
         [`~PretrainedModel.beam_sample`] is called. This is required to match `past_key_values` with the correct
         beam_idx at every generation step.
         """
         return tuple(
-            tuple(past_state.index_select(0, beam_idx.to(past_state.device)) for past_state in layer_past)
-            for layer_past in past_key_values
+            tuple(past_state.index_select(0, beam_idx) for past_state in layer_past) for layer_past in past_key_values
         )
 
 
