@@ -61,6 +61,13 @@ from .models.glm import (
     GlmModel,
     GlmPreTrainedModel,
 )
+from .models.glpn import (
+    GLPNFeatureExtractor,
+    GLPNForDepthEstimation,
+    GLPNImageProcessor,
+    GLPNPreTrainedModel,
+    GLPNModel
+)
 from .models.gpt2 import (
     GPT2DoubleHeadsModel,
     GPT2ForQuestionAnswering,
