@@ -19,4 +19,5 @@ from . import (
     t5,
     umt5,
     xlm_roberta,
+    codegen
 )
