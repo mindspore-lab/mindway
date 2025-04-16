@@ -262,7 +262,7 @@ def load_state_dict(checkpoint_file: Union[str, os.PathLike]):
             # Check format of the archive
             with safe_open(checkpoint_file, framework="np") as f:
                 metadata = f.metadata()
-            if metadata.get("format") not in ["pt", "tf", "flax", "np"]:
+            if metadata is not None and metadata.get("format") not in ["pt", "tf", "flax", "np"]:
                 raise OSError(
                     f"The safetensors archive passed at {checkpoint_file} does not contain the valid metadata. Make sure "
                     "you save your model with the `save_pretrained` method."
