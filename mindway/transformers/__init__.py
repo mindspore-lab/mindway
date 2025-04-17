@@ -6,6 +6,16 @@ from .image_processing_utils import BaseImageProcessor
 from .image_utils import ImageFeatureExtractionMixin
 from .modeling_utils import MSPreTrainedModel
 from .models.auto import AutoImageProcessor, AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM
+from .models.albert import (
+    AlbertPreTrainedModel,
+    AlbertModel,
+    AlbertForPreTraining,
+    AlbertForMaskedLM,
+    AlbertForSequenceClassification,
+    AlbertForTokenClassification,
+    AlbertForQuestionAnswering,
+    AlbertForMultipleChoice,
+)
 from .models.bert import (
     BertForMaskedLM,
     BertForMultipleChoice,
