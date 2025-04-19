@@ -1,4 +1,5 @@
 import mindspore as ms
+from mindspore import JitConfig
 import numpy as np
 
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
@@ -19,12 +20,18 @@ if __name__ == "__main__":
     config = Qwen3Config(
         num_hidden_layers=1,
         use_cache=False,
-        attn_implementation="flash_attention_2",
+        attn_implementation="paged_attention",  # paged_attention flash_attention_2
         sliding_window=None,
     )
+    config.mindspore_dtype = "float16"
 
-    model = Qwen3ForCausalLM(config)
+    model = Qwen3ForCausalLM(config).to(ms.float16)
+
+    jit_config = JitConfig(jit_level="O0", infer_boost="on")
+    model.set_jit_config(jit_config)
+
     print("*" * 100)
+    print(f"Using {config._attn_implementation}, dtype {config.mindspore_dtype}, layer {config.num_hidden_layers}")
     print("Test passed: Sucessfully loaded Qwen3ForCausalLM")
     print("Time elapsed: %.4fs" % (time.time() - start_time))
     print("*" * 100)
