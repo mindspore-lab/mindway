@@ -115,3 +115,26 @@ from .models.umt5 import (
 )
 from .models.xlm_roberta import XLMRobertaModel, XLMRobertaPreTrainedModel
 from .processing_utils import ProcessorMixin
+from .models.big_bird import (
+    BigBirdForCausalLM,
+    BigBirdForMaskedLM,
+    BigBirdForMultipleChoice,
+    BigBirdForPreTraining,
+    BigBirdForQuestionAnswering,
+    BigBirdForSequenceClassification,
+    BigBirdForTokenClassification,
+    BigBirdLayer,
+    BigBirdModel,
+    BigBirdPreTrainedModel,
+    BigBirdTokenizer,
+    BigBirdTokenizerFast,
+)
+from .models.bigbird_pegasus import (
+    BigBirdPegasusForCausalLM,
+    BigBirdPegasusForConditionalGeneration,
+    BigBirdPegasusForQuestionAnswering,
+    BigBirdPegasusForSequenceClassification,
+    BigBirdPegasusModel,
+    BigBirdPegasusPreTrainedModel,
+    BigBirdPegasusConfig
+)

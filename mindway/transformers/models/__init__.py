@@ -19,4 +19,6 @@ from . import (
     t5,
     umt5,
     xlm_roberta,
+    big_bird,
+    bigbird_pegasus
 )
