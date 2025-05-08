@@ -45,7 +45,8 @@ from mindway.transformers.cache_utils import (  # TODO: SlidingWindowCache
     get_seq_length,
     update,
 )
-from mindway.transformers.modeling_attn_mask_utils import _MIN_FP16, dtype_to_min
+from mindway.transformers.mindspore_adapter.utils import _MIN_FP16
+from mindway.transformers.modeling_attn_mask_utils import dtype_to_min
 from mindway.transformers.modeling_outputs import BaseModelOutputWithPast, ModelOutput
 from mindway.transformers.modeling_utils import MSPreTrainedModel
 

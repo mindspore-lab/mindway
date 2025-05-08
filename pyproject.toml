@@ -1,0 +1,100 @@
+[build-system]
+requires = ["hatchling", "hatch-bgd"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mindway"
+dynamic = ["version"]
+description = "the way -> '道' ; focus on multimodal large language model mllm."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "Apache-2.0"
+authors = [
+  { name = "MindSpore Lab", email = "mindspore-lab@example.com" },
+]
+keywords = ["artificial intelligence", "deep learning", "generative model", "diffusion", "mindspore"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "tqdm",
+    "pyyaml",
+    "omegaconf",
+    "opencv-python",
+    "sentencepiece",
+    "trampoline",
+    "numpy<2.0",
+    "huggingface-hub>=0.20.2",
+    "safetensors>=0.3.1",
+    "transformers==4.50.0",
+]
+
+[project.optional-dependencies]
+lint = [
+    "pre-commit"
+]
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+    "mkdocs-static-i18n>=1.2",
+    "mkdocs-git-revision-date-localized-plugin>=1.2",
+    "mkdocs-git-authors-plugin>=0.9",
+    "mike>=2.1"
+]
+training = [
+    "datasets",
+    "protobuf",
+    "tensorboard",
+    "tensorboardX",
+    "ftfy",
+    "Jinja2"
+]
+tests = [
+    "pytest",
+    "pytest-cov",
+    "pytest-mock"
+]
+dev = [
+  "mindway[lint,docs,training,tests]"  # Self-referential. Developers install everything.
+]
+
+[project.urls]
+Homepage = "https://pypi.org/project/mindway/"
+Documentation = "https://mindspore-lab.github.io/mindway/"
+Issues = "https://github.com/mindspore-lab/mindway/issues"
+Source = "https://github.com/mindspore-lab/mindway"
+
+[tool.hatch.envs.default]
+python = "3.8"
+
+[tool.hatch.version]
+source = "bgd"
+base-version = "0.3.0.dev0"
+build-type = "dev"  # ['dev', 'release']
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.github",
+    "/docs",
+    "/examples"
+]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+known_mindspore = ["mindspore"]
+known_first_party = ["mindway"]
+sections = ["FUTURE", "STDLIB", "THIRDPARTY", "MINDSPORE", "FIRSTPARTY", "LOCALFOLDER"]
+
+[tool.black]
+line-length = 120
