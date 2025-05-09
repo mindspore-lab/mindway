@@ -20,7 +20,7 @@ import os
 import re
 import warnings
 from contextlib import contextmanager, nullcontext
-from typing import Callable, Dict, List, Optional, Tuple, Union, MutableMapping
+from typing import Callable, Dict, List, MutableMapping, Optional, Tuple, Union
 
 from transformers.configuration_utils import PretrainedConfig
 from transformers.dynamic_module_utils import custom_object_save
@@ -60,7 +60,7 @@ from .generation.utils import GenerationMixin
 from .integrations import PeftAdapterMixin
 from .integrations.flash_attention import flash_attention_forward
 from .integrations.sdpa_attention import sdpa_attention_forward
-from .mindspore_adapter import dtype_to_str
+from .mindspore_adapter import dtype_to_str, str_to_dtype
 from .modeling_attn_mask_utils import dtype_to_min
 from .utils.import_utils import is_flash_attn_2_available, is_sdpa_available
 
@@ -641,6 +641,54 @@ class PreTrainedModel(nn.Cell, ModuleUtilsMixin, GenerationMixin, PushToHubMixin
         modules properly initialized (such as weight initialization).
         """
         self.init_weights()
+
+    @classmethod
+    def _from_config(cls, config, **kwargs):
+        """
+        All context managers that the model should be initialized under go here.
+
+        Args:
+            mindspore_dtype (`mindspore.dtype`, *optional*):
+                Override the default `mindspore.dtype` and load the model under this dtype.
+
+        Currently, it can't handle deepspeed ZeRO stage 3 and ignores loading errors
+        """
+        # when we init a model from within another model (e.g. VLMs) and dispatch on FA2
+        # a warning is raised that dtype should be fp16. Since we never pass dtype from within
+        # modeling code, we can try to infer it here same way as done in `from_pretrained`
+        mindspore_dtype = kwargs.pop("mindspore_dtype", None)
+        if isinstance(mindspore_dtype, str):
+            mindspore_dtype = str_to_dtype(mindspore_dtype)
+
+        use_flash_attention_2 = kwargs.pop("use_flash_attention_2", False)
+
+        config = copy.deepcopy(config)  # We do not want to modify the config inplace in _from_config.
+
+        if config._attn_implementation_internal is not None:
+            # In this case, the config has been created with the attn_implementation set by the user, which we
+            # should respect.
+            attn_implementation = config._attn_implementation_internal
+        else:
+            attn_implementation = None
+
+        config._attn_implementation = kwargs.pop("attn_implementation", attn_implementation)
+        if not getattr(config, "_attn_implementation_autoset", False):
+            config = cls._autoset_attn_implementation(
+                config,
+                use_flash_attention_2=use_flash_attention_2,
+                mindspore_dtype=mindspore_dtype,
+            )
+
+        model = cls(config, **kwargs)
+
+        if mindspore_dtype is not None:
+            model = model.to(mindspore_dtype)
+
+            logger.info(
+                f"convert model:{model.__class__.__name__} parameters to mindspore_dtype {dtype_to_str(mindspore_dtype)}"
+            )
+
+        return model
 
     @classmethod
     def _autoset_attn_implementation(
@@ -2583,6 +2631,7 @@ class SequenceSummary(nn.Cell):
 
         return output
 
+
 class AttentionInterface(MutableMapping):
     """
     Dict-like object keeping track of allowed attention functions. You can easily add a new attention function
@@ -2634,4 +2683,3 @@ ALL_ATTENTION_FUNCTIONS: AttentionInterface = AttentionInterface()
 
 # for BC
 MSPreTrainedModel = PreTrainedModel
-

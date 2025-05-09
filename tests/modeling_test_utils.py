@@ -7,7 +7,7 @@ import torch
 from ml_dtypes import bfloat16
 
 import mindspore as ms
-from mindspore import mint, nn, ops
+from mindspore import nn, ops
 
 from mindway.transformers.modeling_outputs import BaseModelOutput
 
@@ -108,7 +108,7 @@ def get_pt2ms_mappings(m):
             mappings[f"{name}.weight"] = f"{name}.weight", lambda x: ms.Parameter(
                 ops.expand_dims(x, axis=-2), name=f"{name}.weight"
             )
-        elif isinstance(cell, (nn.Embedding, mint.nn.Embedding)):
+        elif isinstance(cell, (nn.Embedding,)):
             mappings[f"{name}.weight"] = f"{name}.embedding_table", lambda x: x
         elif isinstance(
             cell,
@@ -117,15 +117,11 @@ def get_pt2ms_mappings(m):
                 nn.BatchNorm2d,
                 nn.LayerNorm,
                 nn.GroupNorm,
-                mint.nn.BatchNorm1d,
-                mint.nn.BatchNorm2d,
-                mint.nn.LayerNorm,
-                mint.nn.GroupNorm,
             ),
         ):
             mappings[f"{name}.weight"] = f"{name}.gamma", lambda x: x
             mappings[f"{name}.bias"] = f"{name}.beta", lambda x: x
-            if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, mint.nn.BatchNorm1d, mint.nn.BatchNorm2d)):
+            if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d)):
                 mappings[f"{name}.running_mean"] = f"{name}.moving_mean", lambda x: x
                 mappings[f"{name}.running_var"] = f"{name}.moving_variance", lambda x: x
                 mappings[f"{name}.num_batches_tracked"] = None, lambda x: x

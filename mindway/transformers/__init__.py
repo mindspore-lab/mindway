@@ -37,6 +37,12 @@ from .models.blip_2 import (
     Blip2QFormerModel,
     Blip2VisionModel,
 )
+from .models.chameleon import (
+    ChameleonForConditionalGeneration,
+    ChameleonModel,
+    ChameleonPreTrainedModel,
+    ChameleonVQVAE,
+)
 from .models.clap import (
     ClapAudioModel,
     ClapAudioModelWithProjection,
@@ -75,8 +81,8 @@ from .models.glpn import (
     GLPNFeatureExtractor,
     GLPNForDepthEstimation,
     GLPNImageProcessor,
+    GLPNModel,
     GLPNPreTrainedModel,
-    GLPNModel
 )
 from .models.gpt2 import (
     GPT2DoubleHeadsModel,
@@ -88,31 +94,27 @@ from .models.gpt2 import (
     GPT2PreTrainedModel,
 )
 from .models.hiera import (
+    HieraBackbone,
+    HieraForImageClassification,
     HieraForPreTraining,
     HieraModel,
     HieraPreTrainedModel,
-    HieraBackbone,
-    HieraForImageClassification
 )
-from .models.ijepa import (
-    IJepaForImageClassification,
-    IJepaModel,
-    IJepaPreTrainedModel,
-)
+from .models.ijepa import IJepaForImageClassification, IJepaModel, IJepaPreTrainedModel
 from .models.imagegpt import (
+    ImageGPTFeatureExtractor,
     ImageGPTForCausalImageModeling,
     ImageGPTForImageClassification,
+    ImageGPTImageProcessor,
     ImageGPTModel,
     ImageGPTPreTrainedModel,
-    ImageGPTFeatureExtractor,
-    ImageGPTImageProcessor
 )
 from .models.levit import (
-    LevitModel,
-    LevitForImageClassificationWithTeacher,
+    LevitFeatureExtractor,
     LevitForImageClassification,
+    LevitForImageClassificationWithTeacher,
+    LevitModel,
     LevitPreTrainedModel,
-    LevitFeatureExtractor
 )
 from .models.llama import LlamaForCausalLM, LlamaForSequenceClassification, LlamaModel, LlamaPreTrainedModel
 from .models.llava import LlavaConfig, LlavaForConditionalGeneration

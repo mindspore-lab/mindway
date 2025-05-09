@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .configuration_imagegpt import *
 from .feature_extraction_imagegpt import *
 from .image_processing_imagegpt import *
 from .modeling_imagegpt import *
