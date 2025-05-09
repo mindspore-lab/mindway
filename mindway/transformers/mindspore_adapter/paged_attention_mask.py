@@ -44,7 +44,7 @@ class LowerTriangularMaskWithDynamic(nn.Cell):
             self.lower_triangle_mask = Tensor(
                 np.tril(np.ones(shape=(seq_length, seq_length), dtype=np.int8)), dtype=compute_type
             )
-        elif use_past and not self.is_pynative:
+        elif use_past:
             if not self.use_flash_attention:
                 self.lower_triangle_mask = Tensor(
                     np.tril(np.ones(shape=(seq_length, seq_length), dtype=np.int8)), dtype=compute_type
