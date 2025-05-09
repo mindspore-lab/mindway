@@ -31,6 +31,7 @@ from mindway.transformers.generation.logits_process import (
     MinNewTokensLengthLogitsProcessor,
     PrefixConstrainedLogitsProcessor,
     RepetitionPenaltyLogitsProcessor,
+    SuppressTokensLogitsProcessor,
     TemperatureLogitsWarper,
     TopKLogitsWarper,
     TopPLogitsWarper,
@@ -1233,7 +1234,11 @@ class GenerationMixin:
         if generation_config.exponential_decay_length_penalty is not None:
             raise NotImplementedError
         if generation_config.suppress_tokens is not None:
-            raise NotImplementedError
+            processors.append(
+                SuppressTokensLogitsProcessor(
+                    generation_config.suppress_tokens
+                )
+            )
         if generation_config.begin_suppress_tokens is not None:
             raise NotImplementedError
         if generation_config.forced_decoder_ids is not None:
