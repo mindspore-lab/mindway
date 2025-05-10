@@ -1,0 +1,4 @@
+pytest
+parameterized
+huggingface_hub
+datasets
