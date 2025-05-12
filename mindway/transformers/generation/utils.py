@@ -864,7 +864,7 @@ class GenerationMixin:
                 encoder = getattr(base_model, "encoder", None)
 
             if encoder is not None:
-                encoder_model_args = set(inspect.signature(encoder.forward).parameters)
+                encoder_model_args = set(inspect.signature(encoder.construct).parameters)
                 model_args |= encoder_model_args
 
             # allow decoder kwargs
@@ -873,7 +873,7 @@ class GenerationMixin:
                 decoder = getattr(base_model, "decoder", None)
 
             if decoder is not None:
-                decoder_model_args = set(inspect.signature(decoder.forward).parameters)
+                decoder_model_args = set(inspect.signature(decoder.construct).parameters)
                 model_args |= {f"decoder_{x}" for x in decoder_model_args}
 
             # allow assistant_encoder_outputs to be passed if we're doing assisted generating
@@ -1981,8 +1981,8 @@ class GenerationMixin:
             if not isinstance(outputs, CausalLMOutputWithPast):
                 outputs = CausalLMOutputWithPast(
                     loss=None,
-                    logits=outputs[0],
-                    past_key_values=outputs[1] if model_inputs.get("use_cache", False) else None,
+                    logits=outputs["logits"],
+                    past_key_values=outputs["past_key_values"] if model_inputs.get("use_cache", False) else None,
                 )
 
             # Tuple static cache

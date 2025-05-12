@@ -175,3 +175,12 @@ from .models.umt5 import (
 from .models.xlm_roberta import XLMRobertaModel, XLMRobertaPreTrainedModel
 from .pipelines import TextGenerationPipeline, pipeline
 from .processing_utils import ProcessorMixin
+from .models.myt5 import MyT5Tokenizer
+from .models.switch_transformers import (
+    SwitchTransformersEncoderModel,
+    SwitchTransformersForConditionalGeneration,
+    SwitchTransformersModel,
+    SwitchTransformersPreTrainedModel,
+    SwitchTransformersTop1Router,
+    SwitchTransformersSparseMLP
+)
