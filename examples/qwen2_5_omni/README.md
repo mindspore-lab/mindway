@@ -345,10 +345,12 @@ You should have Ascend hardware that is compatible with FlashAttention 2. Read m
 To load and run a model using FlashAttention-2, add `attn_implementation="flash_attention_2"` when loading the model:
 
 ```python
+import mindspore as ms
 from mindway.transformers import Qwen2_5OmniForConditionalGeneration
 
 model = Qwen2_5OmniForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2.5-Omni-7B",
+    mindspore_dtype=ms.bfloat16,
     attn_implementation="flash_attention_2",
 )
 ```
@@ -366,5 +368,9 @@ Experiments are tested on ascend 910* with mindspore 2.5.0 pynative mode.
 |Qwen2.5-Omni-7B| bf16 | video VQA w/ audio| 20x280x504 | OFF | 0.20 | 89 |
 |Qwen2.5-Omni-7B| fp16 | pure text Q&A | N.A. | OFF | 0.22 | 21 |
 |Qwen2.5-Omni-7B| fp16 | video VQA w/ audio| 20x280x504 | OFF | 0.23 | 30 |
+|Qwen2.5-Omni-7B| bf16 | pure text Q&A | N.A. | ON | 0.18 | 21 |
+|Qwen2.5-Omni-7B| bf16 | video VQA w/ audio| 20x280x504 | ON | 0.17 | 32 |
+|Qwen2.5-Omni-7B| fp16 | pure text Q&A | N.A. | ON | 0.17 | 21 |
+|Qwen2.5-Omni-7B| fp16 | video VQA w/ audio| 20x280x504 | ON | 0.21 | 32 |
 
 *note：apply mixed precision, `Conv3d` use fp16, `AvgPool1d` uses fp32.
