@@ -2890,7 +2890,8 @@ class BigBirdForTokenClassification(BigBirdPreTrainedModel):
             config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         )
         self.dropout = mint.nn.Dropout(classifier_dropout)
-        self.classifier = mint.nn.Linear(config.hidden_size, config.num_labels)
+        # Use nn.Dense to avoid loss nan.
+        self.classifier = nn.Dense(config.hidden_size, config.num_labels)
 
         # Initialize weights and apply final processing
         self.post_init()
