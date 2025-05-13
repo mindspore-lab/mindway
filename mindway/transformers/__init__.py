@@ -136,5 +136,4 @@ from .models.bigbird_pegasus import (
     BigBirdPegasusForSequenceClassification,
     BigBirdPegasusModel,
     BigBirdPegasusPreTrainedModel,
-    BigBirdPegasusConfig
 )
