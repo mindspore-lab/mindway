@@ -61,6 +61,11 @@ from .models.clip import (
     CLIPVisionModel,
     CLIPVisionModelWithProjection,
 )
+from .models.codegen import (
+    CodeGenForCausalLM,
+    CodeGenModel,
+    CodeGenPreTrainedModel
+)
 from .models.dpt import DPTForDepthEstimation
 from .models.gemma import (
     GemmaForCausalLM,
@@ -175,3 +180,7 @@ from .models.umt5 import (
 from .models.xlm_roberta import XLMRobertaModel, XLMRobertaPreTrainedModel
 from .pipelines import TextGenerationPipeline, pipeline
 from .processing_utils import ProcessorMixin
+from .utils import (
+    is_mindspore_available,
+)
+from .trainer_utils import set_seed
