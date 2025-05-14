@@ -20,7 +20,7 @@ def main():
     if DEBUG:
         ms.runtime.launch_blocking()
         config = KimiVLConfig.from_pretrained(MODEL_PATH, attn_implementation="flash_attention_2")
-        config.text_config.num_hidden_layers = 1
+        config.text_config.num_hidden_layers = 2  # one for FFN, one for MOE
         config.vision_config.num_hidden_layers = 1
         model = KimiVLForConditionalGeneration._from_config(config, torch_dtype=ms.bfloat16)
     else:
