@@ -167,13 +167,6 @@ VL_VISION_ATTENTION_FUNCTIONS = {
 }
 
 
-def _apply_rope_input_validation(x: ms.Tensor, freqs_cis: ms.Tensor) -> None:
-    assert x.ndim == freqs_cis.ndim + 1, (x.shape, freqs_cis.shape)
-    assert x.shape[:-2] == freqs_cis.shape[:-1], (x.shape, freqs_cis.shape)
-    assert x.shape[-1] == 2 * freqs_cis.shape[-1], (x.shape, freqs_cis.shape)
-    assert freqs_cis.dtype == ms.complex64, freqs_cis.dtype
-
-
 def complex_mult(a: ms.Tensor, b: ms.Tensor) -> ms.Tensor:
     a_real, a_complex = mint.unbind(a, dim=-1)
     b_real, b_complex = mint.unbind(b, dim=-1)
@@ -187,15 +180,11 @@ def apply_rope(xq: ms.Tensor, xk: ms.Tensor, freqs_cis: ms.Tensor) -> Tuple[ms.T
     Args: (The leading dimensions of all inputs should be the same)
         xq: query, tensor of shape (..., num_heads, head_dim)
         xk: key, tensor of shape (..., num_heads, head_dim)
-        freqs_cis: tensor of shape (..., head_dim/2), dtype=torch.complex64. It contains the precomputed cis(freqs) for each position in the 2D grid.
+        freqs_cis: tensor of shape (..., head_dim/2, 2). It contains the precomputed cis(freqs) for each position in the 2D grid.
     Returns:
         xq_out, xk_out: tensors of shape (..., num_heads, head_dim)
     """
-    _apply_rope_input_validation(xq, freqs_cis)
-    _apply_rope_input_validation(xk, freqs_cis)
-
-    freqs_cis = freqs_cis.unsqueeze(-2)  # ..., 1, head_dim/2
-    freqs_cis = ops.view_as_real(freqs_cis)
+    freqs_cis = freqs_cis.unsqueeze(-3)  # ..., 1, head_dim/2, 2
     # ..., num_heads, head_dim/2
     xq_ = xq.float().view(*xq.shape[:-1], -1, 2)
     xk_ = xk.float().view(*xk.shape[:-1], -1, 2)
@@ -296,7 +285,7 @@ class Rope2DPosEmb(nn.Cell):
         self.max_width = max_width
         self.theta_base = theta_base
 
-        self.freqs_cis = None
+        self.freqs_cis = self._precompute_freqs_cis()
 
     def _precompute_freqs_cis(self) -> ms.Tensor:
         """Calculate the cis(freqs) for each position in the 2D grid.
@@ -316,30 +305,26 @@ class Rope2DPosEmb(nn.Cell):
         y_freqs = mint.outer(y_pos, freqs).float()  # N, C/4
         x_cis = mint.polar(mint.ones_like(x_freqs), x_freqs)  # N, C/4
         y_cis = mint.polar(mint.ones_like(y_freqs), y_freqs)  # N, C/4
-        # N, C/4, 2
-        freqs_cis = mint.cat([x_cis.unsqueeze(dim=-1), y_cis.unsqueeze(dim=-1)], dim=-1)
-        # max_height, max_width, C/2
-        freqs_cis = freqs_cis.reshape(self.max_height, self.max_width, -1)
+        freqs_cis = mint.stack([x_cis, y_cis], dim=-1)  # N, C/4, 2
+        freqs_cis = freqs_cis.reshape(self.max_height, self.max_width, -1)  # max_height, max_width, C/2
+        freqs_cis = ops.view_as_real(freqs_cis)  # max_height, max_width, C/2, 2
         return freqs_cis
 
-    def get_freqs_cis(self, grid_hws: ms.Tensor) -> ms.Tensor:
+    def construct(self, grid_hws: ms.Tensor) -> ms.Tensor:
         """
         Args:
             grid_hws (ms.Tensor): grid height and width
 
         Returns:
-            freqs_cis: tensor of shape (sum(t * height * width), dim//2)
+            freqs_cis: tensor of shape (sum(t * height * width), dim//2, 2)
         """
-        if self.freqs_cis is None:
-            self.freqs_cis = self._precompute_freqs_cis()
-
         shapes = grid_hws.tolist()
         assert all(1 <= h <= self.max_height and 1 <= w <= self.max_width for h, w in shapes), (
             shapes,
             self.max_height,
             self.max_width,
         )
-        freqs_cis = mint.cat([self.freqs_cis[:h, :w].reshape(-1, self.dim // 2) for h, w in shapes], dim=0)
+        freqs_cis = mint.cat([self.freqs_cis[:h, :w].reshape(-1, self.dim // 2, 2) for h, w in shapes], dim=0)
         return freqs_cis
 
 
@@ -460,7 +445,7 @@ class MoonVitEncoder(nn.Cell):
         self.final_layernorm = mint.nn.LayerNorm(hidden_dim)
 
     def construct(self, hidden_states: ms.Tensor, grid_hws: ms.Tensor) -> ms.Tensor:
-        rope_freqs_cis = self.rope_2d.get_freqs_cis(grid_hws=grid_hws)
+        rope_freqs_cis = self.rope_2d(grid_hws=grid_hws)
 
         lengths = mint.cat((mint.zeros(1, dtype=grid_hws.dtype), grid_hws[:, 0] * grid_hws[:, 1]))
         cu_seqlens = lengths.cumsum(dim=0, dtype=ms.int32)
@@ -684,13 +669,6 @@ class DeepseekV3YarnRotaryEmbedding(DeepseekV3RotaryEmbedding):
         ops.assign(self.sin_cached, mint.sin(emb) * _mscale)
 
 
-def rotate_half(x: ms.Tensor) -> ms.Tensor:
-    """Rotates half the hidden dims of the input."""
-    x1 = x[..., : x.shape[-1] // 2]
-    x2 = x[..., x.shape[-1] // 2 :]
-    return mint.cat((-x2, x1), dim=-1)
-
-
 def apply_rotary_pos_emb(
     q: ms.Tensor, k: ms.Tensor, cos: ms.Tensor, sin: ms.Tensor, position_ids: ms.Tensor, unsqueeze_dim: int = 1
 ) -> Tuple[ms.Tensor, ms.Tensor]:
@@ -723,8 +701,8 @@ def apply_rotary_pos_emb(
     b, h, s, d = k.shape
     k = k.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
 
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+    q_embed = ops.rotary_position_embedding(q, cos, sin)
+    k_embed = ops.rotary_position_embedding(k, cos, sin)
     return q_embed, k_embed
 
 
