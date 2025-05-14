@@ -498,18 +498,6 @@ def patch_merger(
     return outputs
 
 
-def _get_unpad_data(attention_mask: ms.Tensor) -> Tuple[ms.Tensor, ms.Tensor, ms.Tensor]:
-    seqlens_in_batch = attention_mask.sum(dim=-1, dtype=ms.int32)
-    indices = mint.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
-    max_seqlen_in_batch = seqlens_in_batch.max().item()
-    cu_seqlens = F.pad(mint.cumsum(seqlens_in_batch, dim=0, dtype=ms.int32), (1, 0))
-    return (
-        indices,
-        cu_seqlens,
-        max_seqlen_in_batch,
-    )
-
-
 class DeepseekV3RMSNorm(nn.Cell):
     def __init__(self, hidden_size: int, eps: float = 1e-6) -> None:
         """
