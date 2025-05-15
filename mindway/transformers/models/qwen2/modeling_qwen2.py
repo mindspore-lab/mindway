@@ -25,7 +25,7 @@ from typing import List, Optional, Tuple, Union
 from transformers import Qwen2Config, logging
 
 import mindspore as ms
-from mindspore import Parameter, Tensor, mint, nn, ops
+from mindspore import Parameter, Tensor, mint, nn, ops, jit
 from mindspore.nn import BCEWithLogitsLoss, CrossEntropyLoss, MSELoss
 
 from mindway.transformers.cache_utils import Cache, get_max_length, get_seq_length, update
@@ -219,7 +219,7 @@ class Qwen2MLP(nn.Cell):
         self.up_proj = nn.Dense(self.hidden_size, self.intermediate_size, has_bias=False)
         self.down_proj = nn.Dense(self.intermediate_size, self.hidden_size, has_bias=False)
         self.act_fn = mint.nn.SiLU()
-
+    @jit
     def construct(self, hidden_state):
         return self.down_proj(self.act_fn(self.gate_proj(hidden_state)) * self.up_proj(hidden_state))
 
@@ -282,7 +282,7 @@ class Qwen2Attention(nn.Cell):
         )
 
         self.scale = self.head_dim**-0.5
-
+    @jit
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -368,7 +368,7 @@ class Qwen2PageAttention(Qwen2Attention):
 
     def __init__(self, config: Qwen2Config, layer_idx: Optional[int] = None):
         super().__init__(config, layer_idx)
-        compute_dtype = str_to_dtype(config.mindspore_dtype)
+        compute_dtype = ms.bfloat16
 
         self.infer_attention = InferAttention(
             config.num_attention_heads,
@@ -389,7 +389,7 @@ class Qwen2PageAttention(Qwen2Attention):
         )
 
         self.is_first_iteration = True
-
+    @jit
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -453,7 +453,7 @@ class Qwen2DecoderLayer(nn.Cell):
 
         if config._attn_implementation == "paged_attention":
             self.is_first_iteration = True
-
+    @jit
     def construct(
         self,
         hidden_states: ms.Tensor,
@@ -684,7 +684,7 @@ class Qwen2Model(Qwen2PreTrainedModel):
 
     def set_input_embeddings(self, value):
         self.embed_tokens = value
-
+    @jit
     def construct(
         self,
         input_ids: ms.Tensor = None,
@@ -847,7 +847,7 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         self.post_init()
 
         if self.config._attn_implementation == "paged_attention":
-            compute_dtype = str_to_dtype(config.mindspore_dtype)
+            compute_dtype = ms.bfloat16
 
             self.freqs_mgr = FreqsMgr(
                 head_dim=config.hidden_size // config.num_attention_heads,
@@ -923,7 +923,7 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             slot_mapping,
             batch_valid_length,
         )
-
+    @jit(jit_level='O1', infer_boost="on", dynamic=1)
     def construct(
         self,
         input_ids: ms.Tensor = None,
@@ -967,7 +967,10 @@ class Qwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
         if block_tables is not None:
-            bs, seq_len = input_ids.shape
+            if input_ids is not None:
+                bs, seq_len = input_ids.shape
+            else:
+                bs, seq_len, _ = inputs_embeds.shape
             mask = None
             if self.is_first_iteration:
                 freqs_cis = self.freqs_mgr.prefill(bs, seq_len)

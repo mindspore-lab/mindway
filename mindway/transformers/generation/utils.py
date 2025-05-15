@@ -720,12 +720,20 @@ class GenerationMixin:
             else:
                 cache_dtype = self.dtype
 
-            self._cache = init_static_cache(
-                config=self.config,
-                max_batch_size=max_batch_size,
-                max_cache_len=max_cache_len,
-                dtype=cache_dtype,
-            )
+            if hasattr(self.config, "text_config"):
+                self._cache = init_static_cache(
+                    config=self.config.text_config,
+                    max_batch_size=max_batch_size,
+                    max_cache_len=max_cache_len,
+                    dtype=cache_dtype,
+                )
+            else:
+                self._cache = init_static_cache(
+                    config=self.config,
+                    max_batch_size=max_batch_size,
+                    max_cache_len=max_cache_len,
+                    dtype=cache_dtype,
+                )
         else:
             self._cache = reset(self._cache)
 
@@ -1737,12 +1745,20 @@ class GenerationMixin:
             )
 
             if need_new_cache:
-                model_kwargs[cache_name] = init_static_cache(
-                    config=self.config,
-                    max_batch_size=max_batch_size,
-                    max_cache_len=max_cache_len,
-                    dtype=cache_dtype,
-                )
+                if hasattr(self.config, "text_config"):
+                    self._cache = init_static_cache(
+                        config=self.config.text_config,
+                        max_batch_size=max_batch_size,
+                        max_cache_len=max_cache_len,
+                        dtype=cache_dtype,
+                    )
+                else:
+                    model_kwargs[cache_name] = init_static_cache(
+                        config=self.config,
+                        max_batch_size=max_batch_size,
+                        max_cache_len=max_cache_len,
+                        dtype=cache_dtype,
+                    )
             else:
                 model_kwargs[cache_name] = reset(past)
 
